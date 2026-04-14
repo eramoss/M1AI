@@ -1,0 +1,273 @@
+% =============================================================
+%  Relatório — Trabalho M1: Classificação Multiclasse com MLP
+%  Disciplina: Inteligência Artificial
+%  Alunos: Gabriel Schaldach Morgado, Eduardo Lechinski Ramos
+% =============================================================
+\documentclass[12pt,a4paper]{article}
+
+% ---------- Pacotes ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazilian]{babel}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{lmodern}
+\usepackage{parskip}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+% ---------- Cabeçalho ----------
+\title{\textbf{Trabalho Prático M1}\\
+       \large Classificação Multiclasse com Redes Neurais\\
+       \normalsize Dry Bean Dataset}
+\author{Gabriel Schaldach Morgado \and Eduardo Lechinski Ramos}
+\date{\today}
+
+% =============================================================
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =============================================================
+\section{Introdução}
+% =============================================================
+
+Este relatório descreve o desenvolvimento de um classificador multiclasse
+baseado em Multilayer Perceptron (MLP) para identificar sete variedades de
+feijão a partir de características morfológicas extraídas de imagens dos grãos.
+O dataset utilizado é o \textit{Dry Bean Dataset}
+(\url{https://archive.ics.uci.edu/dataset/602/dry+bean+dataset}), criado por
+Koklu e Ozkan (2020).
+
+% =============================================================
+\section{Análise Exploratória de Dados}
+% =============================================================
+
+\subsection{Inspeção Inicial}
+
+\textbf{Q1 — Dimensões do dataset:}
+O dataset possui 13.611 linhas e 17 colunas (16 features numéricas + 1 coluna
+alvo \texttt{Class}), em conformidade com a documentação do UCI.
+
+\textbf{Q2 — Valores ausentes e tipos de features:}
+Não há valores ausentes.  Das 16 features, 2 são inteiras (\texttt{Area} e
+\texttt{ConvexArea}) e 14 são contínuas; a variável alvo é categórica.
+
+\textbf{Q3 — Desbalanceamento de classes:}
+A classe BOMBAY possui apenas 522 amostras, enquanto DERMASON possui 3.546.
+Esse desequilíbrio pode levar a rede a favorecer classes majoritárias,
+gerando alta acurácia global mas baixo recall para classes raras.
+A acurácia sozinha pode mascarar esse problema: um modelo que sempre prediz
+DERMASON já obteria cerca de 26\% de acurácia "de graça".
+
+\subsection{Duplicatas}
+
+\textbf{Q4 — Registros duplicados:}
+Foram encontrados 68 registros duplicados no dataset completo.
+O impacto é mínimo dado o volume total (< 0,5\%), mas foram removidos
+para evitar vazamento de informação entre treino e teste.
+
+\subsection{Distribuição das Features}
+
+\textbf{Q5 — Features assimétricas com cauda longa:}
+\texttt{Area}, \texttt{Perimeter}, \texttt{MajorAxisLength},
+\texttt{MinorAxisLength}, \texttt{Eccentricity}, \texttt{ConvexArea},
+\texttt{EquivDiameter} e \texttt{Roundness} apresentam distribuições
+assimétricas evidentes nos histogramas.
+
+\textbf{Q6 — Efeito da transformação logarítmica:}
+A transformação \texttt{log1p} aproximou essas distribuições da normalidade,
+centralizando a média e atenuando os valores extremos.
+Isso beneficia o treinamento ao reduzir a influência de outliers nos gradientes
+e garantir que o StandardScaler opere sobre uma distribuição mais simétrica.
+
+\subsection{Correlação de Pearson}
+
+\textbf{Q7 — Pares com correlação acima de 0,90:}
+\begin{itemize}
+    \item \texttt{Area} e \texttt{Perimeter} ($r > 0{,}95$)
+    \item \texttt{ShapeFactor3} e \texttt{Compactness} ($r > 0{,}92$)
+    \item \texttt{MinorAxisLength} e \texttt{ConvexArea} ($r > 0{,}93$)
+\end{itemize}
+
+\textbf{Q8 — Multicolinearidade:}
+Multicolinearidade ocorre quando variáveis independentes possuem relações
+lineares exatas ou aproximadas entre si.  Features altamente correlacionadas
+carregam informação redundante.  Contudo, \textbf{não é obrigatório} removê-las:
+se a feature é relevante para a tarefa, sua remoção pode introduzir erro de
+especificação.
+
+\subsection{Boxplots por Classe}
+
+\textbf{Q9 — Features selecionadas para o modelo:}
+\textit{Area}, \textit{MajorAxisLength}, \textit{MinorAxisLength},
+\textit{AspectRation}, \textit{Eccentricity}, \textit{Extent},
+\textit{Solidity}, \textit{Roundness}, \textit{Compactness},
+\textit{ShapeFactor1}, \textit{ShapeFactor2} e \textit{ShapeFactor4}.
+As features \texttt{ShapeFactor3}, \texttt{ConvexArea}, \texttt{Perimeter}
+e \texttt{EquivDiameter} foram excluídas por alta correlação com outras.
+
+\textbf{Q10 — Features que melhor separam as classes visualmente:}
+\texttt{ShapeFactor1} e \texttt{Area} apresentaram a maior separação visual
+nos boxplots, com distribuições bem distintas por classe.
+
+\textbf{Q11 — Classes com maior sobreposição:}
+BARBUNYA e HOROZ apresentaram sobreposição considerável em várias features.
+Espera-se que o modelo confunda essas classes com mais frequência.
+
+% =============================================================
+\section{Pré-processamento}
+% =============================================================
+
+
+\subsection{Normalização das Features}
+
+\textbf{Q12 — Por que não ajustar o scaler nos dados de teste?}
+O scaler foi ajustado exclusivamente nos dados de treino.  Usar dados de teste
+no \texttt{fit} introduziria \textit{data leakage}: os parâmetros de
+escalonamento incorporariam informações do conjunto de avaliação.
+
+\textbf{Q13 — Scaler diferente em produção:}
+Se um scaler diferente for aplicado na inferência, as entradas chegam à rede
+em escala distinta da vista no treinamento.  Os pesos da rede foram otimizados
+para uma distribuição específica de entradas, fazendo o modelo ter predições incorretas.
+
+\subsection{Pesos de Classe}
+
+\textbf{Q14 — BOMBAY recebeu o maior peso:}
+Sim.  Com apenas 522 amostras, BOMBAY obteve o maior peso (\(\approx 3{,}7\)),
+inversamente proporcional à sua frequência no dataset.
+
+\textbf{Q15 — Impacto dos pesos na função de perda:}
+Um erro em BOMBAY gera uma penalização aproximadamente 4× maior do que um
+erro em DERMASON.  Isso força a rede a dar mais atenção a exemplos raros
+durante a descida de gradiente.
+
+\subsection{Divisão Treino / Validação / Teste}
+
+\textbf{Q16 — Importância do \texttt{stratify}:}
+O \texttt{stratify=y} garante que cada partição mantenha a proporção original
+de cada classe.  Sem ele, um split puramente aleatório poderia concentrar
+quase todos os exemplos de BOMBAY (522 no total) em um único.
+
+\textbf{Q17 — Dados de teste apenas na avaliação final:}
+Usar dados de teste para escolher arquitetura ou hiperparâmetros junta eles
+implicitamente ao processo de desenvolvimento.  A métrica obtida deixa de
+ser uma estimativa imparcial do desempenho em dados realmente novos.
+
+% =============================================================
+\section{Construção, Treinamento e Experimentos}
+% =============================================================
+
+\subsection{Arquitetura e Decisões de Design}
+
+\textbf{Q18 — Softmax com 7 neurônios na saída:}
+A função softmax transforma as ativações finais em uma distribuição de
+probabilidade que soma 1,0, com um neurônio por classe.
+
+\textbf{Q19 — \texttt{sparse\_categorical\_crossentropy}:}
+Essa função de perda opera sobre rótulos inteiros e não binários diferente de \texttt{binary\_crossentropy} que é restrita à classificação
+binária. \texttt{categorical\_crossentropy} exigiria rótulos em outros formatos.
+
+\textbf{Q20 — Dropout na camada de saída:}
+Não.  O Dropout é aplicado apenas nas camadas ocultas.  Aplicar ele na camada
+de saída desativaria neurônios responsáveis por classes inteiras.
+
+\subsection{Tabela Comparativa de Experimentos}
+
+% PREENCHA OS VALORES COM OS RESULTADOS REAIS DO SEU NOTEBOOK
+\begin{table}[H]
+\centering
+\caption{Resultados dos experimentos no conjunto de teste}
+\label{tab:experimentos}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llllrrrl@{}}
+\toprule
+\textbf{Exp.} & \textbf{Descrição} & \textbf{Features} &
+\textbf{Acurácia} & \textbf{F1-macro} &
+\textbf{Observações} \\
+\midrule
+A  & Sem Dropout (baseline)              & Todas (16)         & .9199 & .9305  & Overfitting visível nas curvas \\
+A2 & Com Dropout (0.3 / 0.2)             & Todas (16)         & .9225 & .9344  & Gap treino-val reduzido (não chegou a reproduzir o overfitting) \\
+B  & A2 + class\_weight                  & Todas (16)         & .9240 & .9355  & Não demonstrou diferença e aumentou o gap de val-loss \\
+C  & Rede maior [256-128-64]             & Todas (16)         & .9221 & .9347  & redução de overfit e rápida convergência \\
+D  & Inicializador RandomNormal          & Todas (16)         & .9254 & .9365  & Convergência mais lenta \\
+E  & Features selecionadas na AED        & Selecionadas (12)  & .9232 & .9353  & Maior confusão entre classes similares \\
+F  & Melhor configuração                 & Todas (16)         & .9266 & .9380  & Melhor F1-macro geral \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+
+% =============================================================
+\section{Avaliação e Análise dos Resultados}
+% =============================================================
+
+\subsection{Matriz de Confusão — Melhor Modelo (Experimento F)}
+
+% Insira a figura gerada pelo notebook:
+% \begin{figure}[H]
+%   \centering
+%   \includegraphics[width=0.75\textwidth]{confusion_matrix_F.png}
+%   \caption{Matriz de confusão do Experimento F no conjunto de teste.}
+%   \label{fig:cm}
+% \end{figure}
+
+\subsection{Análise Qualitativa}
+
+\textbf{Q23 — Classe com menor F1-score:}
+Esperamos que SIRA ou BARBUNYA apresentem os menores F1-scores, o que reflete a sobreposição vista nos boxplots.
+
+
+\textbf{Q24 — Classes confundidas com mais frequência:}
+A matriz de confusão mostra mais entre SIRA e DERMASON,
+o que tinha sido identificado na
+sobreposição na AED.
+
+\textbf{Q25 — BOMBAY e o efeito de class\_weight:}
+A classe BOMBAY foi bem identificada em todos os resultados. O class\_weight nesse caso não teve nenhuma mudança expressiva nessa classe.
+
+\textbf{Q28 — Desbalanceamento e class\_weight:}
+Não houve muitos sinais de efeito no desbalanceamento com os parametros usados, não houve muita mudança nos resultados. As classes desbalanceadas possuem propriedades bem definidas.
+
+\textbf{Q29 — Melhor experimento:}
+O Experimento F produziu o melhor F1-macro porem foram feitos por muitas iterações de teste. O melhor expiremento antes dos testes e iteração foi o experimento C
+
+\textbf{Q30 — Dropout (Exp A vs.\ Exp A2):}
+O dropout reduziu muito o overfit, principalmente quando olhamos para o experimento sem early stopping. No experimento A2 a curva de val\_loss se mostrou muito mais comportada.
+
+\textbf{Q31 — Features selecionadas (Exp E):}
+A remoção de features redundantes não produziu degradação significativa. Na verdade aumentou confusão entre algumas classes similares.
+
+\textbf{Q32 — Justificativa do Experimento F:}
+A arquitetura do experimento F foi baseada em testes. Rodando cada modelo retirando e colocando parametros e vendo o que melhora em cada um, a maior camada e o dropout reduziram consideravelmente o overfit da rede. Diminuimos a taxa de aprendizado por conta dos saltos que podemos ver no decaimento da acurácia dos modelos E por fim 
+
+% =============================================================
+\section{Conclusão}
+% =============================================================
+
+O Experimento F demonstrou que a combinação de arquitetura mais profunda,
+Dropout e uma taxa de aprendizado menor produz o melhor acurácia global e F1-macro. Porém os experimentos foram consistentes retirando os reultados de overfit como o experimento A e A2.
+A análise exploratória foi importante para identificar as classes e peculiaridades que deveriamos ter tomado cuidado ao produzir o modelo. Entender o dataset foi essencial para a melhoria dos parametros.
+
+O uso de \texttt{class\_weight} mostrou-se pouco eficaz, porém reduziu mesmo que minimamente o overfit e manteve o modelo mais estável durante os testes.
+
+% =============================================================
+\end{document}
